@@ -2,7 +2,7 @@ name: Daily Stock Screening
 
 on:
   schedule:
-    - cron: '0 22 * * *'
+    - cron: '0 22 * * 1-5'  # 平日のみ 07:00 JST（月〜金）
   workflow_dispatch:
 
 permissions:
