@@ -101,12 +101,11 @@ import requests as req_lib
 
 def fetch_sp500():
     """S&P500銘柄リスト取得（複数フォールバック）"""
-    # 方法1: requests + User-Agent
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
         resp = req_lib.get("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
                            headers=headers, timeout=30)
-        tables = pd.read_html(resp.text)
+        tables = pd.read_html(StringIO(resp.text))
         tickers = [t.replace(".", "-") for t in tables[0]["Symbol"].tolist()]
         if len(tickers) > 400:
             print(f"  S&P500: {len(tickers)}銘柄")
@@ -114,7 +113,7 @@ def fetch_sp500():
     except Exception as e:
         print(f"  S&P500取得失敗: {e}")
 
-    # 方法2: ハードコードリスト（最終手段）
+    # フォールバック: ハードコードリスト
     tickers = list(set(SP500_FALLBACK))
     print(f"  S&P500 (ハードコード): {len(tickers)}銘柄")
     return tickers
@@ -124,7 +123,7 @@ def fetch_nasdaq100():
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
         resp = req_lib.get("https://en.wikipedia.org/wiki/Nasdaq-100", headers=headers, timeout=30)
-        tables = pd.read_html(resp.text)
+        tables = pd.read_html(StringIO(resp.text))
         for t in tables:
             if "Ticker" in t.columns:
                 tickers = t["Ticker"].dropna().tolist()
