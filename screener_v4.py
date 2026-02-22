@@ -52,7 +52,6 @@ CONFIG = {
     "vcs_best":        80,      # VCS ベスト（≥80で高圧縮）
     "high_52w_pct_max": 35,     # 52週高値からの乖離率上限(%)
     "price_min":       10.0,    # 株価下限（ドル）
-    "ema_low_max":     8.0,     # 21EMA Low% 上限（%）
     "atr_sma50_max":   7.0,     # ATR%50SMA 上限
     "vix_full":        20,
     "vix_half":        25,
@@ -407,7 +406,7 @@ def run_screening(price_data: dict, spy_df) -> list:
         "total": len(universe_tickers),
         "price_filter": 0, "rs_fail": 0,
         "stage2_fail": 0, "high_fail": 0,
-        "ema_fail": 0, "atr_fail": 0, "pass": 0
+        "atr_fail": 0, "pass": 0
     }
 
     for ticker in universe_tickers:
@@ -435,15 +434,11 @@ def run_screening(price_data: dict, spy_df) -> list:
                 cnt["high_fail"] += 1
                 continue
 
-            # ─ 21EMA Low% ≤ 8% ─
-            # (close - EMA21) / EMA21 × 100
+            # ─ 21EMA Low%（フィルターなし・表示・スコア用）─
             c_s   = df["Close"].squeeze()
             ema21_val = float(c_s.ewm(span=21, adjust=False).mean().iloc[-1])
             cl    = float(c_s.iloc[-1])
             ema_low_pct = round((cl - ema21_val) / ema21_val * 100, 2)
-            if ema_low_pct < 0 or ema_low_pct > CONFIG["ema_low_max"]:
-                cnt["ema_fail"] += 1
-                continue
 
             # ─ ATR%50SMA ≤ 7 ─
             # (close - SMA50) × 100 / ATR14
@@ -505,7 +500,7 @@ def run_screening(price_data: dict, spy_df) -> list:
 
     print(f"  [診断] 合計:{cnt['total']} | $10未満:{cnt['price_filter']} | "
           f"RS<50:{cnt['rs_fail']} | Stage2<5:{cnt['stage2_fail']} | "
-          f"52W超:{cnt['high_fail']} | EMA>{CONFIG['ema_low_max']}%:{cnt['ema_fail']} | "
+          f"52W超:{cnt['high_fail']} | "
           f"ATR_SMA50>{CONFIG['atr_sma50_max']}:{cnt['atr_fail']} | 通過:{cnt['pass']}")
 
     return sorted(candidates, key=lambda x: (x["score"], x["rs_p2"] or 0), reverse=True)
