@@ -19,238 +19,28 @@ button{cursor:pointer}
 <body>
 <div id="root"></div>
 <script>
-const {useState, useMemo, useCallback, useEffect} = React;
+const {useState,useMemo,useCallback,useEffect}=React;
+const rsCol=v=>v>=90?"#00ff88":v>=80?"#7dff9e":v>=70?"#f0d060":v>=55?"#ff9933":"#ff4444";
+const numCol=v=>v>5?"#00e676":v>0?"#69f0ae":v<-5?"#ff5252":v<0?"#ff8a80":"#607d8b";
+const fmt=(v,d=1)=>v==null?"—":`${v>0?"+":""}${Number(v).toFixed(d)}%`;
+const fmtRS=v=>v==null?"—":Number(v).toFixed(1);
+const TD={padding:"7px 9px",borderBottom:"1px solid rgba(14,28,48,.6)",whiteSpace:"nowrap"};
 
-const rsCol = v => v>=90?"#00ff88":v>=80?"#7dff9e":v>=70?"#f0d060":v>=55?"#ff9933":"#ff4444";
-const numCol = v => v>2?"#00e676":v>0?"#69f0ae":v<-2?"#ff5252":v<0?"#ff8a80":"#607d8b";
-const fmt = (v,d=1) => v==null?"—":`${v>0?"+":""}${Number(v).toFixed(d)}%`;
-const fmtRS = v => v==null?"—":Number(v).toFixed(1);
-
-const SCORE_DEF = [
-  {min:9,label:"◎ 最有力",col:"#00ff88"},
-  {min:7,label:"○ 有力",col:"#7dff9e"},
-  {min:5,label:"△ 候補",col:"#f0d060"},
+const SCORE_DEF=[
+  {min:8,label:"◎ 最有力",col:"#00ff88"},
+  {min:6,label:"○ 有力",col:"#7dff9e"},
+  {min:4,label:"△ 候補",col:"#f0d060"},
   {min:0,label:"✕",col:"#4a6a88"},
 ];
-const TD = {padding:"7px 9px",borderBottom:"1px solid rgba(14,28,48,.6)",whiteSpace:"nowrap"};
 
 function ScoreBadge({score}){
-  const d = SCORE_DEF.find(x=>score>=x.min)||SCORE_DEF[3];
-  return React.createElement("span",{style:{
-    fontSize:10,padding:"2px 7px",borderRadius:4,fontWeight:700,
-    background:`${d.col}18`,color:d.col,border:`1px solid ${d.col}40`
-  }},d.label);
+  const d=SCORE_DEF.find(x=>score>=x.min)||SCORE_DEF[3];
+  return React.createElement("span",{style:{fontSize:10,padding:"2px 7px",borderRadius:4,fontWeight:700,
+    background:`${d.col}18`,color:d.col,border:`1px solid ${d.col}40`}},d.label);
 }
-
 function RSCell({val,isSort}){
-  if(val==null) return React.createElement("td",{style:{...TD,textAlign:"right",color:"#2a4a6a"}},"—");
+  if(val==null)return React.createElement("td",{style:{...TD,textAlign:"right",color:"#2a4a6a"}},"—");
   const col=rsCol(val);
   return React.createElement("td",{style:{...TD,textAlign:"right"}},
-    React.createElement("span",{style:{
-      color:col,fontWeight:val>=80?700:400,
-      background:isSort?`${col}14`:"transparent",
-      borderRadius:3,padding:isSort?"1px 5px":0
-    }},fmtRS(val))
-  );
-}
-
-function App(){
-  const [rawData,setRawData] = useState(null);
-  const [loading,setLoading] = useState(true);
-  const [error,setError]     = useState(null);
-  const [sortK,setSortK]     = useState("rs_p2");
-  const [sortD,setSortD]     = useState("desc");
-  const [search,setSearch]   = useState("");
-  const [minRS,setMinRS]     = useState(0);
-  const [minEPS,setMinEPS]   = useState(-999);
-  const [maxVCS,setMaxVCS]   = useState(100);
-  const [minStage,setMinStage] = useState(0);
-  const [selected,setSelected] = useState(null);
-  const [showP1,setShowP1]   = useState(false);
-  const [showP2,setShowP2]   = useState(true);
-  const [showP3,setShowP3]   = useState(true);
-  const [showP4,setShowP4]   = useState(true);
-  const [showAvg,setShowAvg] = useState(true);
-
-  useEffect(()=>{
-    fetch("./data.json?t="+Date.now())
-      .then(r=>{ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
-      .then(d=>{ setRawData(d); setLoading(false); })
-      .catch(e=>{ setError(e.message); setLoading(false); });
-  },[]);
-
-  const stocks = rawData?.stocks||[];
-
-  const rows = useMemo(()=>{
-    if(!rawData) return [];
-    return stocks.filter(s=>{
-      if(search){const q=search.toUpperCase();if(!s.ticker?.includes(q)&&!s.name?.toUpperCase().includes(q)&&!s.sector?.toUpperCase().includes(q))return false;}
-      if((s.rs_p2??0)<minRS) return false;
-      if((s.eps??0)<minEPS) return false;
-      if((s.vcs??100)>maxVCS) return false;
-      if((s.stage2??0)<minStage) return false;
-      return true;
-    }).sort((a,b)=>{
-      const av=a[sortK]??-999,bv=b[sortK]??-999;
-      return sortD==="desc"?bv-av:av-bv;
-    });
-  },[rawData,stocks,search,sortK,sortD,minRS,minEPS,maxVCS,minStage]);
-
-  const handleSort = useCallback(k=>{
-    if(k===sortK) setSortD(d=>d==="desc"?"asc":"desc");
-    else{setSortK(k);setSortD("desc");}
-  },[sortK]);
-
-  const rsCols=[
-    {k:"rs_p1",label:"RS5",show:showP1,set:setShowP1},
-    {k:"rs_p2",label:"RS21★",show:showP2,set:setShowP2},
-    {k:"rs_p3",label:"RS63",show:showP3,set:setShowP3},
-    {k:"rs_p4",label:"RS126",show:showP4,set:setShowP4},
-    {k:"rs_avg",label:"Avg",show:showAvg,set:setShowAvg},
-  ].filter(c=>c.show);
-
-  const market=rawData?.market;
-  const topN=rows.filter(r=>(r.score??0)>=9).length;
-  const midN=rows.filter(r=>(r.score??0)>=7&&(r.score??0)<9).length;
-  const vcsN=rows.filter(r=>(r.vcs??100)<=40).length;
-  const e=React.createElement;
-
-  if(loading) return e("div",{style:{display:"flex",alignItems:"center",justifyContent:"center",minHeight:"100vh",flexDirection:"column",gap:16}},
-    e("div",{style:{fontSize:24,color:"#00e5ff"}},"読み込み中..."));
-
-  if(error) return e("div",{style:{display:"flex",alignItems:"center",justifyContent:"center",minHeight:"100vh",flexDirection:"column",gap:12}},
-    e("div",{style:{fontSize:40}},"⚠️"),
-    e("div",{style:{color:"#ff5252",fontSize:14}},"データ取得失敗: "+error),
-    e("button",{onClick:()=>window.location.reload(),style:{marginTop:8,background:"#0a1320",border:"1px solid #0e1c30",borderRadius:8,padding:"8px 20px",color:"#4a6a88",fontSize:12}},"再試行")
-  );
-
-  return e("div",{style:{background:"#060a10",minHeight:"100vh",fontFamily:"monospace",color:"#ddeeff"}},
-    e("div",{style:{position:"sticky",top:0,zIndex:100,background:"rgba(6,10,16,.97)",borderBottom:"1px solid #0e1c30",padding:"9px 14px",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}},
-      e("div",{style:{fontFamily:"sans-serif",fontSize:18,fontWeight:800}},"Stock",e("span",{style:{color:"#00e5ff"}},"Screen")),
-      e("div",{style:{fontSize:9,color:"#2a4a6a",lineHeight:1.6}},
-        e("div",{style:{color:"#00e5ff"}},rawData.updated_jst),
-        e("div",null,`${rawData.universe_size}銘柄 → ${rawData.total_found}候補`)),
-      e("input",{value:search,onChange:ev=>setSearch(ev.target.value),placeholder:"Ticker / 銘柄名 / セクター",style:{background:"#0a1320",border:"1px solid #0e1c30",borderRadius:8,padding:"5px 11px",color:"#ddeeff",fontFamily:"monospace",fontSize:12,width:168,outline:"none"}}),
-      e("div",{style:{display:"flex",gap:3,alignItems:"center"}},
-        e("span",{style:{fontSize:9,color:"#2a4a6a"}},"RS:"),
-        ...[[" 5d",showP1,setShowP1],["21d★",showP2,setShowP2],["63d",showP3,setShowP3],["126d",showP4,setShowP4],["Avg",showAvg,setShowAvg]].map(
-          ([l,v,s])=>e("button",{key:l,onClick:()=>s(x=>!x),style:{background:v?"rgba(0,229,255,.15)":"#0a1320",border:`1px solid ${v?"rgba(0,229,255,.4)":"#0e1c30"}`,borderRadius:6,padding:"3px 8px",color:v?"#00e5ff":"#2a4a6a",fontFamily:"monospace",fontSize:9}},l)
-        )
-      ),
-      e("button",{onClick:()=>window.location.reload(),style:{background:"#0a1320",border:"1px solid #0e1c30",borderRadius:8,padding:"5px 11px",color:"#4a6a88",fontSize:11}},"🔄 最新に更新")
-    ),
-    e("div",{style:{display:"flex",maxWidth:1700,margin:"0 auto"}},
-      e("div",{style:{width:180,flexShrink:0,padding:"14px 11px",borderRight:"1px solid #0e1c30",display:"flex",flexDirection:"column",gap:14}},
-        e("div",{style:{fontSize:9,color:"#1e3450",letterSpacing:".12em",textTransform:"uppercase"}},"フィルター"),
-        ...[
-          {label:"RS P2 最低",val:minRS,set:setMinRS,min:0,max:99,step:5,d:v=>`${v}+`},
-          {label:"EPS 最低%",val:minEPS,set:setMinEPS,min:-50,max:200,step:10,d:v=>`${v}%+`},
-          {label:"VCS 最高",val:maxVCS,set:setMaxVCS,min:30,max:100,step:5,d:v=>`〜${v}`},
-          {label:"Stage2 最低",val:minStage,set:setMinStage,min:0,max:9,step:1,d:v=>`${v}/9+`},
-        ].map(f=>e("div",{key:f.label},
-          e("div",{style:{display:"flex",justifyContent:"space-between",marginBottom:4}},
-            e("span",{style:{fontSize:10,color:"#4a6a88"}},f.label),
-            e("span",{style:{fontSize:10,color:"#00e5ff",fontWeight:700}},f.d(f.val))),
-          e("input",{type:"range",min:f.min,max:f.max,step:f.step,value:f.val,onChange:ev=>f.set(+ev.target.value)})
-        )),
-        e("button",{onClick:()=>{setMinRS(0);setMinEPS(-999);setMaxVCS(100);setMinStage(0);setSearch("");},style:{background:"none",border:"1px solid #0e1c30",borderRadius:6,color:"#4a6a88",padding:"5px 0",fontSize:11}},"リセット"),
-        market&&e("div",{style:{borderTop:"1px solid #0e1c30",paddingTop:12}},
-          e("div",{style:{fontSize:9,color:"#1e3450",textTransform:"uppercase",marginBottom:8}},"マクロ"),
-          e("div",{style:{fontSize:13,fontWeight:700,color:"#ddeeff",marginBottom:6}},`${market.icon} ${market.mode}`),
-          e("div",{style:{fontSize:11,color:"#f0d060",marginBottom:8}},`VIX: ${market.vix}`),
-          ...Object.entries(market.etfs||{}).map(([etf,d])=>
-            e("div",{key:etf,style:{fontSize:10,color:d.above&&d.rising?"#00e676":"#ff5252",marginBottom:3}},`${d.above&&d.rising?"🟢":"🔴"} ${etf} $${d.close}`))
-        ),
-        e("div",{style:{borderTop:"1px solid #0e1c30",paddingTop:10,fontSize:9,color:"#2a4a6a",lineHeight:2}},
-          e("div",{style:{color:"#4a6a88",marginBottom:4}},"スコア"),
-          "EPS≥25% +2",e("br"),"売上≥15% +2",e("br"),"ROE≥12% +1",e("br"),
-          "RS≥80 +2",e("br"),"VCS≤60 +2",e("br"),"VCS≤40 +1",e("br"),"Stage2≥8 +1")
-      ),
-      e("div",{style:{flex:1,padding:"12px 13px",minWidth:0}},
-        e("div",{style:{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:10}},
-          ...[{label:"表示銘柄",val:rows.length,col:"#00e5ff"},{label:"◎ 最有力",val:topN,col:"#00ff88"},{label:"○ 有力",val:midN,col:"#7dff9e"},{label:"VCS≤40",val:vcsN,col:"#ff4444"}].map(s=>
-            e("div",{key:s.label,style:{background:"#0a1320",border:"1px solid #0e1c30",borderRadius:10,padding:"9px 12px"}},
-              e("div",{style:{fontSize:9,color:"#2a4a6a",textTransform:"uppercase",marginBottom:3}},s.label),
-              e("div",{style:{fontSize:22,fontWeight:500,color:s.col,fontFamily:"sans-serif"}},s.val))
-          )
-        ),
-        selected&&e("div",{style:{background:"rgba(0,255,140,.04)",border:"1px solid rgba(0,255,140,.18)",borderRadius:12,padding:"12px 16px",marginBottom:10}},
-          e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}},
-            e("div",{style:{display:"flex",alignItems:"center",gap:10}},
-              e("span",{style:{fontFamily:"sans-serif",fontSize:22,fontWeight:800,color:"#00ff88"}},selected.ticker),
-              e("span",{style:{color:"#4a6a88",fontSize:12}},selected.name),
-              e(ScoreBadge,{score:selected.score??0})),
-            e("button",{onClick:()=>setSelected(null),style:{background:"none",border:"none",color:"#4a6a88",fontSize:16}},"✕")),
-          e("div",{style:{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6}},
-            ...[
-              {l:"RS P1(5日)",v:fmtRS(selected.rs_p1),col:rsCol(selected.rs_p1??0)},
-              {l:"RS P2(21日)★",v:fmtRS(selected.rs_p2),col:rsCol(selected.rs_p2??0)},
-              {l:"RS P3(63日)",v:fmtRS(selected.rs_p3),col:rsCol(selected.rs_p3??0)},
-              {l:"RS P4(126日)",v:fmtRS(selected.rs_p4),col:rsCol(selected.rs_p4??0)},
-              {l:"RS Avg",v:fmtRS(selected.rs_avg),col:rsCol(selected.rs_avg??0)},
-              {l:"EPS成長",v:fmt(selected.eps),col:numCol(selected.eps??0)},
-              {l:"売上成長",v:fmt(selected.rev),col:numCol(selected.rev??0)},
-              {l:"ROE",v:`${selected.roe??'—'}%`,col:(selected.roe??0)>=12?"#00e676":"#ff8a80"},
-              {l:"Stage2",v:`${selected.stage2}/9`,col:(selected.stage2??0)>=8?"#00e5ff":"#f0d060"},
-              {l:"VCS",v:String(selected.vcs??'—'),col:(selected.vcs??100)<=40?"#ff4444":(selected.vcs??100)<=60?"#00e676":"#f0d060"},
-              {l:"52W高値比",v:fmt(selected.pct_high),col:numCol(selected.pct_high??0)},
-              {l:"ADR%",v:selected.adr?`${selected.adr}%`:"—",col:"#ddeeff"},
-              {l:"損切り",v:`$${selected.stop}`,col:"#ff5252"},
-              {l:"TP1(+10%)",v:`$${selected.tp1}`,col:"#00ff88"},
-              {l:"TP2(+20%)",v:`$${selected.tp2}`,col:"#00e5ff"},
-              {l:"時価総額",v:`$${selected.market_cap_b}B`,col:"#ddeeff"},
-            ].map(m=>e("div",{key:m.l,style:{background:"#0a1320",border:"1px solid #0e1c30",borderRadius:8,padding:"7px 10px",textAlign:"center"}},
-              e("div",{style:{fontSize:9,color:"#2a4a6a",marginBottom:3}},m.l),
-              e("div",{style:{fontSize:13,fontWeight:500,color:m.col}},m.v)))
-          )
-        ),
-        e("div",{style:{background:"#0a1320",border:"1px solid #0e1c30",borderRadius:12,overflow:"hidden"}},
-          e("div",{style:{overflowX:"auto"}},
-            e("table",{style:{width:"100%",borderCollapse:"collapse",fontSize:11}},
-              e("thead",null,
-                e("tr",{style:{background:"#060a10",borderBottom:"1px solid #0e1c30"}},
-                  ...[{k:"rs_p2",label:"RS★",align:"center"},{k:"t",label:"Ticker",align:"left",noSort:true},{k:"n",label:"銘柄名",align:"left",noSort:true},{k:"s",label:"セクター",align:"left",noSort:true}].map(c=>
-                    e("th",{key:c.k,onClick:()=>!c.noSort&&handleSort(c.k),style:{padding:"8px 9px",textAlign:c.align||"right",color:sortK===c.k?"#00e5ff":"#1e3a5a",fontSize:9,fontWeight:700,textTransform:"uppercase",letterSpacing:".08em",userSelect:"none",cursor:c.noSort?"default":"pointer",background:sortK===c.k?"rgba(0,229,255,.04)":"transparent"}},c.label,!c.noSort&&sortK===c.k&&(sortD==="desc"?" ↓":" ↑"))
-                  ),
-                  ...rsCols.map(c=>e("th",{key:c.k,onClick:()=>handleSort(c.k),style:{padding:"8px 9px",textAlign:"right",color:sortK===c.k?"#00e5ff":"#1e3a5a",fontSize:9,fontWeight:700,textTransform:"uppercase",letterSpacing:".08em",userSelect:"none",cursor:"pointer",background:sortK===c.k?"rgba(0,229,255,.06)":"transparent",borderBottom:sortK===c.k?"2px solid #00e5ff":"none"}},c.label,sortK===c.k&&(sortD==="desc"?" ↓":" ↑"))),
-                  ...[{k:"eps",label:"EPS%"},{k:"rev",label:"売上%"},{k:"roe",label:"ROE%"},{k:"stage2",label:"Stage2"},{k:"vcs",label:"VCS"},{k:"pct_high",label:"52W"},{k:"score",label:"Score"}].map(c=>
-                    e("th",{key:c.k,onClick:()=>handleSort(c.k),style:{padding:"8px 9px",textAlign:"right",color:sortK===c.k?"#00e5ff":"#1e3a5a",fontSize:9,fontWeight:700,textTransform:"uppercase",letterSpacing:".08em",userSelect:"none",cursor:"pointer"}},c.label,sortK===c.k&&(sortD==="desc"?" ↓":" ↑"))
-                  ),
-                  e("th",{style:{padding:"8px 9px",fontSize:9,color:"#1e3a5a",textTransform:"uppercase"}},"評価")
-                )
-              ),
-              e("tbody",null,
-                rows.length===0
-                  ? e("tr",null,e("td",{colSpan:20,style:{padding:"40px",textAlign:"center",color:"#2a4a6a"}},"条件に合う銘柄がありません"))
-                  : rows.map(d=>e("tr",{key:d.ticker,className:"row",onClick:()=>setSelected(d),style:{background:selected?.ticker===d.ticker?"rgba(0,255,140,0.05)":"transparent"}},
-                    e("td",{style:{...TD,textAlign:"center"}},e("span",{style:{display:"inline-block",background:`${rsCol(d.rs_p2??0)}15`,color:rsCol(d.rs_p2??0),border:`1px solid ${rsCol(d.rs_p2??0)}35`,borderRadius:5,padding:"1px 7px",fontSize:12,fontWeight:700}},fmtRS(d.rs_p2))),
-                    e("td",{style:{...TD,textAlign:"left"}},e("span",{style:{fontFamily:"sans-serif",fontWeight:800,color:"#00e5ff",fontSize:13}},d.ticker)),
-                    e("td",{style:{...TD,textAlign:"left",color:"#5a7a9a",fontSize:10,maxWidth:140,overflow:"hidden",textOverflow:"ellipsis"}},d.name),
-                    e("td",{style:{...TD,textAlign:"left",color:"#3a5a7a",fontSize:10}},d.sector),
-                    ...rsCols.map(c=>e(RSCell,{key:c.k,val:d[c.k],isSort:sortK===c.k})),
-                    e("td",{style:{...TD,textAlign:"right",color:numCol(d.eps??0),fontWeight:(d.eps??0)>=25?700:400}},fmt(d.eps)),
-                    e("td",{style:{...TD,textAlign:"right",color:numCol(d.rev??0),fontWeight:(d.rev??0)>=15?700:400}},fmt(d.rev)),
-                    e("td",{style:{...TD,textAlign:"right",color:(d.roe??0)>=12?"#00e676":"#ff8a80"}},`${d.roe??'—'}%`),
-                    e("td",{style:{...TD,textAlign:"right",color:(d.stage2??0)>=8?"#00e5ff":(d.stage2??0)>=7?"#f0d060":"#ff8a80"}},`${d.stage2}/9`),
-                    e("td",{style:{...TD,textAlign:"right"}},e("span",{style:{fontWeight:700,color:(d.vcs??100)<=40?"#ff4444":(d.vcs??100)<=60?"#00e676":(d.vcs??100)<=75?"#f0d060":"#607d8b"}},d.vcs??'—')),
-                    e("td",{style:{...TD,textAlign:"right",color:numCol(d.pct_high??0)}},fmt(d.pct_high)),
-                    e("td",{style:{...TD,textAlign:"right",fontFamily:"sans-serif",fontWeight:700,color:"#ddeeff"}},d.score??0),
-                    e("td",{style:{...TD,textAlign:"center"}},e(ScoreBadge,{score:d.score??0}))
-                  ))
-              )
-            )
-          )
-        ),
-        e("div",{style:{marginTop:8,fontSize:9,color:"#1e3450",display:"flex",justifyContent:"space-between"}},
-          e("span",null,"RS = percentrank(TICKER/SPY, period) | ★P2(21日)ソート | 行クリック→詳細"),
-          e("span",null,`${rows.length}件 / ${rawData.total_found}候補 / ${rawData.universe_size}スキャン`)
-        )
-      )
-    )
-  );
-}
-
-ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
-</script>
-</body>
-</html>
+    React.createElement("span",{style:{color:col,fontWeight:val>=80?700:400,
+      background:isSort?`$
