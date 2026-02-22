@@ -48,8 +48,8 @@ CONFIG = {
     "rs_benchmark":    "SPY",
     "rs_min":          50,      # RS P2 最低ライン
     "stage2_min":      5,       # Stage2スコア最低（9段階）
-    "vcs_entry":       60,      # VCS エントリー基準
-    "vcs_best":        40,      # VCS ベスト
+    "vcs_entry":       60,      # VCS エントリー基準（≥60で収縮中）
+    "vcs_best":        80,      # VCS ベスト（≥80で高圧縮）
     "high_52w_pct_max": 35,     # 52週高値からの乖離率上限(%)
     "price_min":       10.0,    # 株価下限（ドル）
     "vix_full":        20,
@@ -297,19 +297,66 @@ def calc_stage2(df) -> dict | None:
 # VCS (Volatility Contraction Score)
 # ============================================================
 def calc_vcs(df) -> dict:
+    """
+    VCS (Volatility Contraction Score) — Pine Script完全再現
+    高スコア(≥80)=良い、低スコア=ルーズ
+    """
     try:
-        c, h, l, v = (
-            df["Close"].squeeze(), df["High"].squeeze(),
-            df["Low"].squeeze(), df["Volume"].squeeze()
-        )
-        tr    = pd.concat([h-l, (h-c.shift()).abs(), (l-c.shift()).abs()], axis=1).max(axis=1)
-        atr   = tr.rolling(14).mean()
-        apct  = (atr / c) * 100
-        score = round(float(apct.iloc[-1]) / float(apct.tail(252).mean()) * 100, 1)
-        vol_shrink = bool(v.tail(5).mean() < v.tail(20).mean())
-        return {"score": score, "vol_shrink": vol_shrink}
+        c = df["Close"].squeeze()
+        h = df["High"].squeeze()
+        l = df["Low"].squeeze()
+        v = df["Volume"].squeeze()
+        if len(c) < 70:
+            return {"score": 0, "vol_shrink": False}
+
+        lenShort=13; lenLong=63; lenVol=50
+        sensitivity=2.0; bonusMax=15
+        penaltyFactor=0.75; trendPenaltyWeight=1.0; hlLookback=63
+
+        # ATR比較
+        tr = pd.concat([(h-l),(h-c.shift(1)).abs(),(l-c.shift(1)).abs()],axis=1).max(axis=1)
+        trShort  = tr.rolling(lenShort).mean()
+        trLong   = tr.rolling(lenLong).mean()
+        ratioATR = trShort / trLong.clip(lower=1e-6)
+        # STDEV比較
+        stdShort = c.rolling(lenShort).std()
+        stdLong  = c.rolling(lenLong).std()
+        ratioStd = stdShort / stdLong.clip(lower=1e-6)
+        # Volume収縮
+        volAvg      = v.rolling(lenVol).mean()
+        volShortAvg = v.rolling(5).mean()
+        volRatio    = volShortAvg / volAvg.clip(lower=1.0)
+        # Efficiencyフィルター（トレンドペナルティ）
+        netChange   = (c - c.shift(lenShort)).abs()
+        totalTravel = tr.rolling(lenShort).sum()
+        efficiency  = netChange / totalTravel.clip(lower=1e-6)
+        trendFactor = (1.0 - efficiency * trendPenaltyWeight).clip(lower=0.0)
+        # スコア合成
+        s_atr = (1.0-ratioATR).clip(lower=0.0)*sensitivity
+        s_std = (1.0-ratioStd).clip(lower=0.0)*sensitivity
+        s_vol = (1.0-volRatio).clip(lower=0.0)
+        rawScore     = s_atr*0.4 + s_std*0.4 + s_vol*0.2
+        physicsScore = (rawScore * trendFactor * 100).clip(upper=100)
+        smoothPhysics= physicsScore.ewm(span=3, adjust=False).mean()
+        # HigherLow構造チェック
+        lowRecent   = l.rolling(lenShort).min()
+        lowBase     = l.shift(lenShort).rolling(hlLookback).min()
+        isHigherLow = lowRecent >= lowBase.fillna(0)
+        # Consistencyボーナス
+        isTight   = smoothPhysics >= 70
+        groups    = (isTight != isTight.shift()).cumsum()
+        daysTight = isTight.groupby(groups).cumcount().where(isTight,0) + isTight.astype(int)
+        daysTight = daysTight.where(isTight, 0)
+        # 最終スコア
+        totalScore = smoothPhysics*0.85 + daysTight.clip(upper=bonusMax)
+        finalScore = totalScore.where(isHigherLow, totalScore*penaltyFactor).fillna(0.0)
+
+        return {
+            "score":      round(float(finalScore.iloc[-1]), 1),
+            "vol_shrink": bool(volRatio.iloc[-1] < 1.0),
+        }
     except Exception:
-        return {"score": 100, "vol_shrink": False}
+        return {"score": 0, "vol_shrink": False}
 
 def calc_adr(df, period=20) -> float | None:
     try:
@@ -406,8 +453,8 @@ def run_screening(price_data: dict, spy_df) -> list:
             if rs_p2 >= 90:   sc += 3
             elif rs_p2 >= 70: sc += 2
             elif rs_p2 >= 50: sc += 1
-            if vcs["score"] <= CONFIG["vcs_best"]:   sc += 3
-            elif vcs["score"] <= CONFIG["vcs_entry"]: sc += 1
+            if vcs["score"] >= CONFIG["vcs_best"]:   sc += 3   # ≥80: 高圧縮
+            elif vcs["score"] >= CONFIG["vcs_entry"]: sc += 1  # ≥60: 収縮中
             if s2["score"] == 9:   sc += 2
             elif s2["score"] >= 7: sc += 1
             if abs(s2["pct_from_high"]) <= 10: sc += 1  # 52W高値-10%以内
