@@ -97,7 +97,6 @@ SP500_FALLBACK = [
     "LCID","RIVN","SNOW","UBER","COIN","PLTR","APP","TTD","AXON","CAVA","ONON","EME",
 ]
 
-import requests as req_lib
 
 def fetch_sp500():
     """S&P500銘柄リスト取得（複数フォールバック）"""
@@ -134,27 +133,82 @@ def fetch_nasdaq100():
         print(f"  NASDAQ100取得失敗: {e}")
     return []
 
-def fetch_russell2000():
-    """Russell 2000銘柄リスト取得（iShares IWM ETF経由）"""
-    try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        url = "https://www.ishares.com/us/products/239710/ishares-russell-2000-etf/1467271812596.ajax?tab=all&fileType=csv"
-        resp = req_lib.get(url, headers=headers, timeout=60)
-        lines = resp.text.split("\n")
-        start = next(i for i, l in enumerate(lines) if "Ticker" in l or "ISIN" in l)
-        df = pd.read_csv(StringIO("\n".join(lines[start:])))
-        col = [c for c in df.columns if "Ticker" in c or "ticker" in c][0]
-        tickers = df[col].dropna().tolist()
-        tickers = [t.strip().replace(".", "-") for t in tickers
-                   if isinstance(t, str) and len(t.strip()) <= 6 and t.strip().replace("-","").isalpha()]
-        if len(tickers) > 500:
-            print(f"  Russell 2000: {len(tickers)}銘柄")
-            return tickers
-    except Exception as e:
-        print(f"  iShares取得失敗: {e}")
 
-    print("  Russell 2000取得失敗 → スキップ")
-    return []
+
+# ============================================================
+# Russell 2000 銘柄取得
+# ============================================================
+
+# 小型株フォールバック（update_russell2000.py失敗時の緊急用）
+RUSSELL2000_FALLBACK = [
+    "ACLS","ACMR","AGYS","ALRM","AMSC","AOSL","APPF","BAND","BLKB","CALX",
+    "CAMT","CEVA","CLFD","COHU","CPSI","CSWI","DFIN","DGII","DIOD","DOMO",
+    "EMKR","EXTR","FIVN","FORM","FOUR","HLIT","ICFI","INFA","INFN","INMD",
+    "KTOS","LSCC","LSTR","MGNI","MLAB","MMSI","MODN","MRTN","MTSI","MYRG",
+    "NABL","NCNO","NTGR","OMCL","ONTO","OPCH","QTWO","RCKT","RCUS","RDFN",
+    "RDNT","RICK","RMNI","ROCK","ROLL","RXRX","SDGR","SEMR","SHLS","SILC",
+    "SIMO","SITM","SKYW","SLGN","SMPL","SNEX","SPSC","SQSP","SRDX","SSYS",
+    "SUPN","TALO","TASK","TCMD","TELA","TENB","TMDX","TNDM","TNET","TPIC",
+    "TREX","TRMK","TRNS","TRUP","TTMI","TWST","TXMD","TZOO","UFPI","UMBF",
+    "UNFI","UNIT","UPST","USLM","USNA","USPH","UTMD","VCYT","VIAV","VRRM",
+    "VSEC","WDFC","WERN","WETF","WOLF","WSFS","WULF","XPEL","XPOF","YELP",
+    "ZETA","ZEUS","ZUMZ","ZYXI","DOCN","MSTR","SYNA","NTNX","LCUT","ACCD",
+    "ADMA","AHCO","AKRO","ALEC","AMPH","ARDX","ARQT","ATRC","AVNS","AXGN",
+    "AXSM","BCYC","BFLY","BLFS","BNGO","CARA","CDMO","CERT","CGEM","CHRS",
+    "CLDX","CNMD","CODA","COGT","CORT","CPRX","CRSP","CVAC","CYRX","DNLI",
+    "DVAX","EDIT","ELVN","ERAS","EVBG","EVLO","FATE","FGEN","FLGT","FOLD",
+    "FULC","GALT","GDRX","GERN","GOSS","HALO","HCAT","HRTX","HTBX","ICAD",
+    "IDYA","IMGN","IMMP","IOVA","ITCI","KNSA","KPTI","KROS","KRTX","LBPH",
+    "LEGN","LGND","LIVN","LMAT","MDXG","MGNX","MGTX","MIRM","MNKD","MORF",
+    "NKTR","NTRA","NUVA","NVAX","NVCR","OCGN","OFIX","OMER","OPTN","ORIC",
+    "ORGO","ORTX","OSUR","OVID","PAHC","PCRX","PCVX","PRCT","PRDO","PRTK",
+    "PTCT","PTGX","QDEL","RDUS","RVNC","SAGE","SANA","TGTX","TBPH","TXMD",
+    "ZGNX","ABCB","ACNB","AMNB","BHLB","BRKL","BSVN","BUSE","CATC","CBAN",
+    "CCBG","CFFI","CLBK","CNOB","CTBI","DCOM","EBTC","EFSC","EGBN","ESSA",
+    "EVTC","EXPI","FBMS","FFIC","FFWM","FISI","FLIC","FMCB","FMNB","FNLC",
+    "FRME","FSBW","GABC","GBCI","GCBC","GFED","GNTY","HAFC","HBCP","HBIA",
+    "HFWA","HMST","HOPE","HONE","HRZN","HTBK","HTLF","IBTX","INBK","INDB",
+    "KELYA","KFRC","KLIC","KVHI","LKFN","LGIH","LNDC","LOVE","LPSN","LQDT",
+    "MATX","MBUU","MCRI","MFIN","MHO","MOFG","MPAA","MSEX","NBHC","NBTB",
+    "OCFC","ORRF","PATK","PEBO","PERI","PFBC","PFIS","PGNY","PLCE","PLMR",
+    "PNFP","POWL","PPBI","PRAA","PRFT","PRGS","QCRH","RUSHA","RUTH","RYAM",
+    "SFBS","SFNC","SMBC","SMBK","SPFI","STBA","TCBI","TCBK","THFF","TILE",
+    "UCBI","UMBF","UMPQ","WSFS","ZEUS","AR","CIVI","CNX","CRGY","MGY","MTDR",
+    "NOG","RRC","SBOW","SM","VTLE","ARCH","CEIX","HCC","ARLP","AAON","APOG",
+    "ARKO","ASIX","ATNI","CADE","CASH","DXPE","ERII","FCFS","FLNC","FWRG",
+    "GRND","GTLS","HWKN","IMAX","IMXI","INSG","INSW","IOSP","KALU","KIDS",
+    "KOPN","LLNW","MANT","MIDD","MLNK","MRAM","NARI","NNBR","NOMD","NRDS",
+    "NWLI","OMAB","OPRX","OSBC","PACK","PATK","PDFS","PLAB","PLXS","PRFT",
+    "RCKT","RICK","RMNI","ROLL","RXRX","RYAM","SDGR","SEMR","SHLS","SILC",
+    "SKYW","SLGN","SMID","SMPL","SNEX","SPSC","SQSP","SRDX","SSYS","TALO",
+    "TASK","TCMD","TELA","TENB","TMDX","TNDM","TNET","TPIC","TREX","TRNS",
+    "TTMI","TWST","UFPI","UNIT","UPST","USLM","USNA","VSEC","WDFC","WERN",
+    "WETF","WOLF","WSFS","XPEL","YELP","ZETA","ZEUS",
+]
+
+def fetch_russell2000() -> list[str]:
+    """
+    Russell 2000銘柄取得（3段階フォールバック）
+
+    優先順位:
+      1. リポジトリ内のrussell2000.txt（update_russell2000.pyが月次生成、約2000銘柄）
+      2. ハードコードフォールバック（約500銘柄）
+    """
+    # --- 優先: リポジトリ内のローカルファイル ---
+    local_path = Path("russell2000.txt")
+    if local_path.exists():
+        raw = [t.strip() for t in local_path.read_text().splitlines() if t.strip()]
+        tickers = [t for t in raw if 1 <= len(t.replace("-","")) <= 5 and t.replace("-","").isalpha()]
+        if len(tickers) > 500:
+            print(f"  Russell 2000 (russell2000.txt): {len(tickers)}銘柄")
+            return tickers
+        print(f"  russell2000.txt が少ない({len(tickers)}) → フォールバック")
+
+    # --- フォールバック: ハードコード ---
+    tickers = list(set(RUSSELL2000_FALLBACK))
+    print(f"  Russell 2000 (ハードコード): {len(tickers)}銘柄")
+    return tickers
+
 
 def build_universe(mode="full"):
     tickers = set()
