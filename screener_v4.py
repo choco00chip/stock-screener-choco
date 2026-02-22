@@ -41,7 +41,7 @@ CONFIG = {
     "stop_loss_pct":     7.0,
     "max_workers":       6,
     "batch_size":        50,
-    "price_period":      "1y",
+    "price_period":      "2y",
     "price_min":        10.0,   # 株価10ドル未満を除外
     "max_output":        100,
 }
@@ -224,7 +224,7 @@ def build_universe(mode="full"):
     tickers -= exclude
     # 小型株フィルター: 記号が長すぎるもの・数字含むものを除外
     tickers = {t for t in tickers if len(t) <= 5 and t.replace("-","").isalpha()}
-    result = sorted(list(tickers))
+    import random; result = sorted(list(tickers)); random.shuffle(result)
     print(f"  ユニバース合計: {len(result)}銘柄")
     return result
 
@@ -446,7 +446,7 @@ def run_screening(price_data, funda_data, spy_df) -> list:
 
             # ─ Stage2 ─
             s2 = calc_stage2(df)
-            if s2 is None or s2["score"] < 7:
+            if s2 is None or s2["score"] < 5:
                 continue
             if abs(s2["pct_from_high"]) > CONFIG["high_52w_pct_max"]:
                 continue
