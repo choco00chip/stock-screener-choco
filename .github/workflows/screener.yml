@@ -2,8 +2,14 @@ name: Daily Stock Screening
 
 on:
   schedule:
-    - cron: '0 22 * * 1-5'  # 平日のみ 07:00 JST（月〜金）
+    - cron: '0 22 * * 1-5'   # 毎日 07:00 JST（月〜金）
+    - cron: '0 20 1 * *'      # 毎月1日 05:00 JST（ティッカーリスト更新）
   workflow_dispatch:
+    inputs:
+      update_tickers:
+        description: 'Russell 2000ティッカーリストも更新する'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -11,16 +17,64 @@ permissions:
   id-token: write
 
 jobs:
-  screen:
+  # ============================================================
+  # Job 1: Russell 2000ティッカーリスト更新（月次）
+  # ============================================================
+  update_tickers:
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 30
+    # 毎月1日 OR 手動で update_tickers=true の場合のみ実行
+    if: |
+      github.event_name == 'schedule' && contains(github.event.schedule, '0 20 1') ||
+      github.event_name == 'workflow_dispatch' && github.event.inputs.update_tickers == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: ライブラリインストール
+        run: pip install requests beautifulsoup4 lxml
+      - name: Russell 2000ティッカーリスト更新
+        run: python update_russell2000.py
+      - name: 更新結果をコミット
+        run: |
+          git config user.email "bot@github.com"
+          git config user.name "Screener Bot"
+          git add russell2000.txt
+          git diff --staged --quiet || git commit -m "📋 Russell 2000ティッカーリスト更新 $(date +'%Y-%m')"
+          git push
+
+  # ============================================================
+  # Job 2: 毎日のスクリーニング
+  # ============================================================
+  screen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    # update_tickersが実行された場合はその後に実行（依存関係）
+    # 通常の平日スケジュールでは単独実行
+    needs: []
+    if: |
+      always() &&
+      (github.event_name == 'schedule' && contains(github.event.schedule, '0 22') ||
+       github.event_name == 'workflow_dispatch')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # update_tickersがrussell2000.txtを更新した場合も取得
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: ライブラリインストール
         run: pip install yfinance pandas numpy requests lxml html5lib beautifulsoup4
+      - name: russell2000.txtの確認
+        run: |
+          if [ -f russell2000.txt ]; then
+            COUNT=$(wc -l < russell2000.txt)
+            echo "russell2000.txt: ${COUNT}銘柄"
+          else
+            echo "russell2000.txt: なし（初回はupdate_tickersを先に実行してください）"
+          fi
       - name: スクリーニング実行
         run: python screener_v4.py --mode full
       - name: 結果をコミット
@@ -31,9 +85,13 @@ jobs:
           git diff --staged --quiet || git commit -m "📊 スクリーニング更新 $(date +'%Y-%m-%d')"
           git push
 
+  # ============================================================
+  # Job 3: GitHub Pages デプロイ
+  # ============================================================
   deploy:
     needs: screen
     runs-on: ubuntu-latest
+    if: always() && needs.screen.result == 'success'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
