@@ -423,33 +423,49 @@ def assess_market(price_data: dict) -> dict:
 # ============================================================
 # スクリーニング
 # ============================================================
+# ============================================================
+# スクリーニング
+# ============================================================
 def run_screening(price_data, funda_data, spy_df) -> list:
     candidates = []
     universe_tickers = [t for t in price_data if t not in MACRO_TICKERS]
 
+    # 診断カウンター
+    cnt = {"total": len(universe_tickers), "no_price": 0, "price_filter": 0,
+           "rs_fail": 0, "stage2_fail": 0, "high_fail": 0, "pass": 0}
+
     for ticker in universe_tickers:
         try:
             df = price_data[ticker]
-            f  = funda_data.get(ticker)
-            if f is None:
-                continue
 
             # ─ 株価フィルター ─
             current_price = float(df["Close"].iloc[-1])
             if current_price < CONFIG["price_min"]:
+                cnt["price_filter"] += 1
                 continue
 
             # ─ RS（実計算）─
             rs = calc_rs(df, spy_df)
             if rs is None or (rs.get("p2") or 0) < 50:
+                cnt["rs_fail"] += 1
                 continue
 
             # ─ Stage2 ─
             s2 = calc_stage2(df)
             if s2 is None or s2["score"] < 5:
+                cnt["stage2_fail"] += 1
                 continue
             if abs(s2["pct_from_high"]) > CONFIG["high_52w_pct_max"]:
+                cnt["high_fail"] += 1
                 continue
+
+            # ─ ファンダメンタル（取れなくてもスキップしない）─
+            f = funda_data.get(ticker) or {
+                "market_cap": 0, "market_cap_b": 0,
+                "roe": 0, "revenue_growth": 0, "earnings_growth": 0,
+                "profit_margin": 0, "sector": "N/A", "industry": "N/A",
+                "name": ticker,
+            }
 
             # ─ VCS / ADR ─
             vcs = calc_vcs(df)
@@ -465,6 +481,7 @@ def run_screening(price_data, funda_data, spy_df) -> list:
             if vcs["score"]         <= CONFIG["vcs_best"]:              sc += 1
             if s2["score"]          >= 8:                               sc += 1
 
+            cnt["pass"] += 1
             candidates.append({
                 "ticker":     ticker,
                 "name":       f["name"],
@@ -476,29 +493,30 @@ def run_screening(price_data, funda_data, spy_df) -> list:
                 "stage2":     s2["score"],
                 "ema21":      s2["ema21"],
                 "sma50":      s2["sma50"],
-                # ─ RS（TradingView準拠の実計算値）─
                 "rs_p1":      rs.get("p1"),
                 "rs_p2":      rs.get("p2"),
                 "rs_p3":      rs.get("p3"),
                 "rs_p4":      rs.get("p4"),
                 "rs_avg":     rs.get("avg"),
-                # ─ ファンダ ─
                 "eps":        f["earnings_growth"],
                 "rev":        f["revenue_growth"],
                 "roe":        f["roe"],
                 "margin":     f["profit_margin"],
-                # ─ テクニカル ─
                 "vcs":        vcs["score"],
                 "vol_shrink": vcs["vol_shrink"],
                 "adr":        adr,
                 "score":      sc,
-                # ─ トレード管理 ─
                 "stop":       round(s2["close"] * (1 - CONFIG["stop_loss_pct"] / 100), 2),
                 "tp1":        round(s2["close"] * 1.10, 2),
                 "tp2":        round(s2["close"] * 1.20, 2),
             })
         except Exception:
-            pass
+            cnt["no_price"] += 1
+
+    # 診断ログ
+    print(f"  [診断] 対象:{cnt['total']} | 株価<$10:{cnt['price_filter']} | "
+          f"RS<50:{cnt['rs_fail']} | Stage2<5:{cnt['stage2_fail']} | "
+          f"52W超:{cnt['high_fail']} | エラー:{cnt['no_price']} | 通過:{cnt['pass']}")
 
     return sorted(candidates, key=lambda x: (x["score"], x["rs_p2"] or 0), reverse=True)
 
