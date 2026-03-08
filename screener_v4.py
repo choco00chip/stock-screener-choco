@@ -1,5 +1,5 @@
 """
-Stock Screener v5.0 - Pure Technical (Price Data Only)
+Stock Screener v5.1 - Pure Technical (Price Data Only)
 =======================================================
 Yahoo Finance .info は401エラーで使用不可のため、
 yf.download()の価格データのみでスクリーニングする。
@@ -14,11 +14,11 @@ yf.download()の価格データのみでスクリーニングする。
   RS_P2 ≥ 90  → +3
   RS_P2 ≥ 70  → +2（≥90未満）
   RS_P2 ≥ 50  → +1（≥70未満）
-  VCS ≥ 80    → +3
-  VCS ≥ 60    → +1（≥80未満）
+  VCS ≤ 40    → +3
+  VCS ≤ 60    → +1（≤40未満）
   Stage2 = 9  → +2
   Stage2 ≥ 7  → +1（9未満）
-  EMA≤3%以内  → +1
+  52W高値-10%以内 → +1
 
 出力: docs/data.json
 """
@@ -34,7 +34,6 @@ import requests as req_lib
 from io import StringIO
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 warnings.filterwarnings("ignore")
 
@@ -44,20 +43,25 @@ DOCS = Path("docs")
 DOCS.mkdir(exist_ok=True)
 
 CONFIG = {
-    "rs_periods":      {"p1": 5, "p2": 21, "p3": 63, "p4": 126},
-    "rs_benchmark":    "SPY",
-    "rs_min":          50,      # RS P2 最低ライン
-    "stage2_min":      5,       # Stage2スコア最低（9段階）
-    "vcs_entry":       60,      # VCS エントリー基準（≥60で収縮中）
-    "vcs_best":        80,      # VCS ベスト（≥80で高圧縮）
-    "high_52w_pct_max": 35,     # 52週高値からの乖離率上限(%)
-    "price_min":       10.0,    # 株価下限（ドル）
-    "vix_full":        20,
-    "vix_half":        25,
-    "stop_loss_pct":   7.0,
-    "batch_size":      50,
-    "price_period":    "2y",    # 200日MA計算に2年必要
-    "max_output":      200,     # 最大出力銘柄数
+    "rs_periods":        {"p1": 5, "p2": 21, "p3": 63, "p4": 126},
+    "rs_benchmark":      "SPY",
+    "rs_min":            50,
+    "stage2_min":        5,
+    "vcs_entry":         60,
+    "vcs_best":          80,
+    "high_52w_pct_max":  35,
+    "price_min":         10.0,
+    "vix_full":          20,
+    "vix_half":          25,
+    "stop_loss_pct":     7.0,
+    "batch_size":        50,
+    "price_period":      "2y",
+    "max_output":        200,
+    # SPAC/ETF判定閾値
+    "spac_price_range_max": 0.03,   # 直近60日の価格レンジが3%未満 → SPAC
+    "etf_adr_max":          0.40,   # ADR% < 0.4% → ETF的挙動
+    "spac_nav_low":         9.0,
+    "spac_nav_high":        10.8,
 }
 
 MACRO_TICKERS = ["SPY", "QQQ", "IWM", "^VIX"]
@@ -186,18 +190,115 @@ def fetch_russell2000():
     print(f"  Russell 2000 (ハードコード): {len(tickers)}銘柄")
     return tickers
 
+# ETF既知リスト（ユニバース構築時に除外）
+ETF_EXCLUDE = {
+    "SPY","IVV","VOO","VTI","QQQ","IWM","DIA","RSP","MDY","IJH","IJR",
+    "VB","VO","VV","SCHB","SCHX","SCHM","SCHA","ITOT",
+    # セクターETF
+    "XLK","XLF","XLE","XLC","XLY","XLP","XLI","XLV","XLB","XLRE","XLU",
+    "VGT","VFH","VDE","VCR","VDC","VIS","VHT","VAW","VNQ","VPU",
+    "SOXX","SMH","IBB","XBI","XHB","ITB","XOP","OIH","KRE","KBE","GDX","GDXJ",
+    # 国際ETF
+    "EFA","EEM","IEMG","VEA","VWO","IEFA","EWJ","EWZ","FXI","INDA",
+    "VGK","VPL","ACWI","ACWX","VXUS","IXUS","KWEB",
+    # 債券ETF
+    "AGG","BND","LQD","HYG","JNK","TLT","IEF","SHY","GOVT","MBB",
+    "VCIT","VCSH","VGIT","VGSH","VGLT","BSV","BIV","BLV","BNDX",
+    # コモディティ
+    "GLD","IAU","SLV","PDBC","DJP","GSG","DBB","DBC","USO","UNG",
+    # レバレッジ・インバース
+    "TQQQ","SQQQ","UPRO","SPXU","SPXL","SPXS","TNA","TZA","LABU","LABD",
+    "SOXL","SOXS","FAS","FAZ","UVXY","SVXY","VXX","VIXY",
+    # テーマ・スマートベータ
+    "ARKK","ARKG","ARKW","ARKF","ARKQ","ARKX",
+    "MTUM","QUAL","USMV","VLUE","DGRO","DGRW","VIG","NOBL","SDY",
+    "HDV","DVY","SCHD","VYM","COWZ","CALF","AVUV",
+    "IWF","IWD","IWO","IWN","VUG","VTV","VBR","VBK","VOE","VOT",
+    "ICLN","QCLN","TAN","FAN","ROBO","BOTZ","WCLD","BUG","CLOU","SKYY","HACK",
+}
+
+# ============================================================
+# バイオ・創薬株 既知除外リスト
+# 治験段階・無収益の投機的バイオを除外。
+# 大型製薬（LLY/ABBV/VRTX等）はADR%が低いため除外されない。
+# ============================================================
+BIOTECH_EXCLUDE = {
+    # 遺伝子編集・細胞療法
+    "CRSP","EDIT","BEAM","NTLA","PRME","VERV","GRPH","DTIL","SANA",
+    "FATE","ALLO","CRISPR",
+    # mRNA・ワクチン
+    "NVAX","BNTX",
+    # 低分子・希少疾患（無収益）
+    "BNGO","RXRX","ACMR","DNLI","KROS","KRTX","TGTX","TBPH","ZGNX",
+    "RVNC","SAGE","PTGX","PCVX","RCUS","ELVN","ERAS","FULC","GALT",
+    "OVID","ORIC","AXSM","BCYC","CARA","CGEM","CHRS","CLDX","CODA",
+    "COGT","CORT","DVAX","IDYA","IMMP","IOVA","ITCI","KNSA","KPTI",
+    "LBPH","LEGN","MIRM","MNKD","MORF","NKTR","NVAX","OCGN","OMER",
+    "OPTN","ORTX","PRDO","PRTK","PTCT","QDEL","RDUS","SANA","TBPH",
+    "TMDX","TNDM","VCYT","ZGNX",
+    # Russell2000バイオ
+    "ACCD","ADMA","AHCO","AKRO","ALEC","AMPH","ARDX","ARQT","ATRC",
+    "AVNS","AXGN","BCYC","BFLY","BLFS","CDMO","CERT","CVAC","CYRX",
+    "EDIT","EVBG","EVLO","FGEN","FLGT","FOLD","GDRX","GERN","GOSS",
+    "HALO","HCAT","HRTX","HTBX","ICAD","IMGN","INMD","LMAT","MDXG",
+    "MGNX","MGTX","MNKD","NTRA","NUVA","NVCR","OFIX","PAHC","PCRX",
+    "PRCT","RVNC","SAGE","TGTX","ZGNX",
+}
+
+import re as _re
+
+def _classify_ticker(ticker: str) -> str:
+    """
+    ティッカー文字列のみでSPAC・ワラント・優先株・派生証券・バイオを判定。
+    Returns "ok" または除外理由文字列。
+    """
+    t = ticker.upper()
+    if t in ETF_EXCLUDE:
+        return "etf_known"
+    if t in BIOTECH_EXCLUDE:           # ★ バイオ既知リスト
+        return "biotech_known"
+    if _re.search(r"\d", t):                # 数字入り → SPAC派生・ユニット
+        return "warrant_or_unit"
+    if "-" in t:
+        suffix = t.split("-")[-1]
+        if suffix in ("A", "B", "C"):       # 株クラス区別はOK（BRK-B等）
+            return "ok"
+        return "preferred_or_derivative"    # PD/PJ/PA等は優先株
+    if t.endswith("W") and len(t) >= 5:     # PSTHW等ワラント（4文字以下はPACW等普通株）
+        return "warrant"
+    if t.endswith("R") and len(t) >= 6:     # 権利証券
+        return "rights"
+    return "ok"
+
+
 def build_universe(mode="full"):
-    tickers = set()
-    if mode in ["full", "sp500"]:       tickers.update(fetch_sp500())
-    if mode in ["full", "nasdaq"]:      tickers.update(fetch_nasdaq100())
-    if mode in ["full", "russell2000"]: tickers.update(fetch_russell2000())
-    exclude = {"SPY","QQQ","IWM","DIA","RSP","GLD","SLV","TLT","HYG","VXX",
-               "IEMG","EFA","AGG","BND","VEA","VWO","IEFA","ITOT","IVV","VOO"}
-    tickers -= exclude
-    tickers = {t for t in tickers if len(t) <= 5 and t.replace("-","").isalpha()}
-    result = list(tickers)
+    raw = set()
+    if mode in ["full", "sp500"]:       raw.update(fetch_sp500())
+    if mode in ["full", "nasdaq"]:      raw.update(fetch_nasdaq100())
+    if mode in ["full", "russell2000"]: raw.update(fetch_russell2000())
+
+    result = []
+    skip = {"etf_known": 0, "biotech_known": 0, "warrant": 0, "rights": 0,
+            "warrant_or_unit": 0, "preferred_or_derivative": 0, "too_long": 0}
+
+    for t in raw:
+        if t in MACRO_TICKERS:
+            continue
+        if len(t) > 5:                      # 6文字以上はSPAC派生等
+            skip["too_long"] += 1
+            continue
+        kind = _classify_ticker(t)
+        if kind == "ok":
+            result.append(t)
+        else:
+            skip[kind] = skip.get(kind, 0) + 1
+
     random.shuffle(result)
-    print(f"  ユニバース合計: {len(result)}銘柄")
+    print(f"  除外内訳: ETF既知={skip['etf_known']} | バイオ既知={skip['biotech_known']} | "
+          f"ワラント={skip['warrant']} | 権利={skip['rights']} | "
+          f"SPAC派生={skip['warrant_or_unit']} | 優先株={skip['preferred_or_derivative']} | "
+          f"長すぎ={skip['too_long']}")
+    print(f"  ユニバース合計（フィルター後）: {len(result)}銘柄")
     return result
 
 # ============================================================
@@ -239,7 +340,7 @@ def percentrank(series: pd.Series, period: int):
         return None
     current = valid[-1]
     below   = int(np.sum(valid < current))
-    return round(below / (period - 1) * 100, 2)
+    return round(below / (len(valid) - 1) * 100, 2)  # NaN混入時も正確な分母を使う
 
 def calc_rs(ticker_df, spy_df) -> dict | None:
     try:
@@ -284,20 +385,21 @@ def calc_stage2(df) -> dict | None:
         ]
         h52 = float(c.tail(252).max())
         return {
-            "score":         sum(conds),
-            "close":         round(cl, 2),
+            "score":        sum(conds),
+            "close":        round(cl, 2),
             "pct_from_high": round((cl - h52) / h52 * 100, 1),
-            "ema21":         round(v21, 2),
-            "sma50":         round(v50, 2),
+            "ema21":        round(v21, 2),
+            "sma50":        round(v50, 2),
         }
     except Exception:
         return None
 
 # ============================================================
-# VCS (Volatility Contraction Score) — Pine Script完全再現
+# VCS (Volatility Contraction Score)
 # ============================================================
 def calc_vcs(df) -> dict:
     """
+    VCS (Volatility Contraction Score) — Pine Script完全再現
     高スコア(≥80)=良い、低スコア=ルーズ
     """
     try:
@@ -312,33 +414,41 @@ def calc_vcs(df) -> dict:
         sensitivity=2.0; bonusMax=15
         penaltyFactor=0.75; trendPenaltyWeight=1.0; hlLookback=63
 
+        # ATR比較
         tr = pd.concat([(h-l),(h-c.shift(1)).abs(),(l-c.shift(1)).abs()],axis=1).max(axis=1)
         trShort  = tr.rolling(lenShort).mean()
         trLong   = tr.rolling(lenLong).mean()
         ratioATR = trShort / trLong.clip(lower=1e-6)
+        # STDEV比較
         stdShort = c.rolling(lenShort).std()
         stdLong  = c.rolling(lenLong).std()
         ratioStd = stdShort / stdLong.clip(lower=1e-6)
+        # Volume収縮
         volAvg      = v.rolling(lenVol).mean()
         volShortAvg = v.rolling(5).mean()
         volRatio    = volShortAvg / volAvg.clip(lower=1.0)
+        # Efficiencyフィルター（トレンドペナルティ）
         netChange   = (c - c.shift(lenShort)).abs()
         totalTravel = tr.rolling(lenShort).sum()
         efficiency  = netChange / totalTravel.clip(lower=1e-6)
         trendFactor = (1.0 - efficiency * trendPenaltyWeight).clip(lower=0.0)
+        # スコア合成
         s_atr = (1.0-ratioATR).clip(lower=0.0)*sensitivity
         s_std = (1.0-ratioStd).clip(lower=0.0)*sensitivity
         s_vol = (1.0-volRatio).clip(lower=0.0)
         rawScore     = s_atr*0.4 + s_std*0.4 + s_vol*0.2
         physicsScore = (rawScore * trendFactor * 100).clip(upper=100)
         smoothPhysics= physicsScore.ewm(span=3, adjust=False).mean()
+        # HigherLow構造チェック
         lowRecent   = l.rolling(lenShort).min()
         lowBase     = l.shift(lenShort).rolling(hlLookback).min()
         isHigherLow = lowRecent >= lowBase.fillna(0)
+        # Consistencyボーナス
         isTight   = smoothPhysics >= 70
         groups    = (isTight != isTight.shift()).cumsum()
         daysTight = isTight.groupby(groups).cumcount().where(isTight,0) + isTight.astype(int)
         daysTight = daysTight.where(isTight, 0)
+        # 最終スコア
         totalScore = smoothPhysics*0.85 + daysTight.clip(upper=bonusMax)
         finalScore = totalScore.where(isHigherLow, totalScore*penaltyFactor).fillna(0.0)
 
@@ -356,12 +466,13 @@ def calc_adr(df, period=20) -> float | None:
         return None
 
 def calc_momentum(df) -> dict:
+    """1M/3M/6Mリターン（価格データから計算）"""
     try:
         c = df["Close"].squeeze().dropna()
         def ret(days):
             if len(c) < days + 1:
                 return None
-            return round((float(c.iloc[-1]) / float(c.iloc[-days]) - 1) * 100, 1)
+            return round((float(c.iloc[-1]) / float(c.iloc[-(days+1)]) - 1) * 100, 1)  # -days は(days-1)日前のため+1補正
         return {"m1": ret(21), "m3": ret(63), "m6": ret(126)}
     except Exception:
         return {"m1": None, "m3": None, "m6": None}
@@ -403,8 +514,8 @@ def run_screening(price_data: dict, spy_df) -> list:
 
     cnt = {
         "total": len(universe_tickers),
-        "price_filter": 0, "rs_fail": 0,
-        "stage2_fail": 0, "high_fail": 0, "pass": 0
+        "price_filter": 0, "spac_filter": 0, "etf_behavior": 0,
+        "rs_fail": 0, "stage2_fail": 0, "high_fail": 0, "pass": 0
     }
 
     for ticker in universe_tickers:
@@ -416,6 +527,26 @@ def run_screening(price_data: dict, spy_df) -> list:
             if current_price < CONFIG["price_min"]:
                 cnt["price_filter"] += 1
                 continue
+
+            # ─ SPAC価格判定（NAV$9〜$10.8付近 + 60日レンジ<3%）─
+            try:
+                _c = df["Close"].squeeze().dropna()
+                if 9.0 <= float(_c.tail(60).mean()) <= 10.8:
+                    _rng = (float(_c.tail(60).max()) - float(_c.tail(60).min())) / float(_c.tail(60).mean())
+                    if _rng < 0.03:
+                        cnt["spac_filter"] += 1
+                        continue
+            except Exception:
+                pass
+
+            # ─ ETF的挙動判定（ADR% < 0.4% → ETF/ETP）─
+            try:
+                _adr = float(((df["High"].squeeze()/df["Low"].squeeze()).tail(20).mean()-1)*100)
+                if _adr < 0.40:
+                    cnt["etf_behavior"] += 1
+                    continue
+            except Exception:
+                pass
 
             # ─ RS ─
             rs = calc_rs(df, spy_df)
@@ -494,6 +625,7 @@ def run_screening(price_data: dict, spy_df) -> list:
             pass
 
     print(f"  [診断] 合計:{cnt['total']} | $10未満:{cnt['price_filter']} | "
+          f"SPAC除外:{cnt['spac_filter']} | ETF挙動除外:{cnt['etf_behavior']} | "
           f"RS<50:{cnt['rs_fail']} | Stage2<5:{cnt['stage2_fail']} | "
           f"52W超:{cnt['high_fail']} | 通過:{cnt['pass']}")
 
@@ -535,7 +667,7 @@ def main():
     args = p.parse_args()
 
     print(f"\n{'='*60}")
-    print(f"Stock Screener v5.0 — Pure Technical")
+    print(f"Stock Screener v5.1 — Pure Technical + SPAC/ETF Filter")
     print(f"RS = percentrank(TICKER/SPY, period) — TradingView準拠")
     print(f"{NOW.strftime('%Y-%m-%d %H:%M JST')} | mode={args.mode}")
     print(f"{'='*60}\n")
